@@ -1,0 +1,8 @@
+{
+  "name": "Remix: AnonDrive Chat",
+  "description": "Anonymous messaging with Google Drive image storage, message deletion, and auto-opening links. No account registration needed.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

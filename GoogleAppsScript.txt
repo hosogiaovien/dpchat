@@ -1,0 +1,32 @@
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    
+    // Nếu action = 'delete'
+    if (data.action === 'delete') {
+      var file = DriveApp.getFileById(data.fileId);
+      file.setTrashed(true);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: "Đã xóa file" })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Nếu là upload
+    var folderId = data.folderId || '1gg291NQhPlN-Zv_KDxXOhiqH73wNTkdc'; // Thư mục của bạn
+    var folder = DriveApp.getFolderById(folderId);
+    var blob = Utilities.newBlob(Utilities.base64Decode(data.base64), data.mimeType, data.fileName);
+    var file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    // Lấy link view
+    var url = "https://drive.google.com/uc?export=view&id=" + file.getId();
+    
+    return ContentService.createTextOutput(JSON.stringify({ url: url })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ error: error.toString() })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// Xử lý preflight CORS nếu cần
+function doOptions(e) {
+  return ContentService.createTextOutput("")
+    .setMimeType(ContentService.MimeType.TEXT);
+}
