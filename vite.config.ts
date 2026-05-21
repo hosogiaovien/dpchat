@@ -7,6 +7,9 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
+    define: {
+      'process.env.APPS_SCRIPT_URL': JSON.stringify(env.APPS_SCRIPT_URL),
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
