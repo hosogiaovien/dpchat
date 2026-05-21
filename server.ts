@@ -166,6 +166,46 @@ async function startServer() {
     }
   });
 
+  // API: Upload image from URL (Bypass Vercel payload limit)
+  app.post("/api/upload-url", async (req, res) => {
+    try {
+      const { url, filename, mimetype } = req.body;
+      if (!url) return res.status(400).json({ error: "No URL provided" });
+
+      // Download file to memory
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Failed to download temporary file");
+      
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      // Create a mock Express.Multer.File object
+      const mockFile: Express.Multer.File = {
+        fieldname: "image",
+        originalname: filename || "upload.jpg",
+        encoding: "7bit",
+        mimetype: mimetype || "image/jpeg",
+        buffer: buffer,
+        size: buffer.length,
+        destination: "",
+        filename: filename || "upload.jpg",
+        path: "",
+        stream: null as any
+      };
+
+      const driveUrl = await uploadToDrive(mockFile);
+      
+      if (!driveUrl) {
+        return res.json({ url: "https://placehold.co/600x400?text=Drive+Not+Configured" });
+      }
+
+      res.json({ url: driveUrl });
+    } catch (error: any) {
+      console.error("Upload URL route error:", error);
+      res.status(500).json({ error: error.message || "Failed to upload image" });
+    }
+  });
+
   // API: Delete image/video
   app.post("/api/delete", async (req, res) => {
     try {
