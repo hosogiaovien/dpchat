@@ -6,7 +6,7 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { db, storage } from "./firebase";
 import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -140,29 +140,99 @@ export default function App() {
         const formData = new FormData();
         formData.append("image", file);
         
-        const response = await fetch("/api/upload", {
-          method: "POST",
-          body: formData,
-        });
+        try {
+          // Direct upload to Google Apps script to bypass Vercel payload limits
+          const appScriptUrl = process.env.APPS_SCRIPT_URL;
+          
+          if (appScriptUrl && appScriptUrl.includes("script.google.com")) {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            
+            await new Promise((resolve, reject) => {
+              reader.onload = async () => {
+                try {
+                  const base64withPrefix = reader.result as string;
+                  const base64 = base64withPrefix.split(",")[1];
+                  
+                  const response = await fetch(appScriptUrl, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "text/plain", // bypass CORS preflight
+                    },
+                    body: JSON.stringify({
+                      base64: base64,
+                      mimeType: file.type,
+                      fileName: file.name
+                    }),
+                  });
 
-        const data = await response.json();
-        if (data.url) {
-          const newMessage = {
-            imageUrl: data.url,
-            fileType: file.type || (file.name.match(/\.(mp4|webm|ogg|wmv|avi|mov|mkv)$/i) ? 'video/mp4' : 'image/jpeg'),
-            timestamp: Date.now(),
-            anonymousId: anonId,
-          };
-          await addDoc(collection(db, "messages"), newMessage);
-        } else if (data.error) {
-          console.error("Upload failed for file " + file.name + ": " + data.error);
+                  // Google Apps script redirects, browser follows, result is JSON string
+                  const resultText = await response.text();
+                  let data;
+                  try {
+                    data = JSON.parse(resultText);
+                  } catch (e) {
+                    console.error("Failed to parse GAS response", resultText);
+                    throw new Error("Invalid response from Google Drive");
+                  }
+
+                  if (data.url) {
+                    const newMessage = {
+                      imageUrl: data.url,
+                      fileType: file.type || (file.name.match(/\.(mp4|webm|ogg|wmv|avi|mov|mkv)$/i) ? 'video/mp4' : 'image/jpeg'),
+                      timestamp: Date.now(),
+                      anonymousId: anonId,
+                    };
+                    await addDoc(collection(db, "messages"), newMessage);
+                  } else if (data.error) {
+                    throw new Error(data.error);
+                  }
+                  resolve(true);
+                } catch (e) {
+                  reject(e);
+                }
+              };
+              reader.onerror = (e) => reject(e);
+            });
+          } else {
+            // Fallback to Vercel/Node backend
+            const formData = new FormData();
+            formData.append("image", file);
+            
+            const response = await fetch("/api/upload", {
+              method: "POST",
+              body: formData,
+            });
+
+            if (!response.ok) {
+              if (response.status === 413) throw new Error("File too large for Vercel Serverless");
+              throw new Error(`Server error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            if (data.url) {
+              const newMessage = {
+                imageUrl: data.url,
+                fileType: file.type || (file.name.match(/\.(mp4|webm|ogg|wmv|avi|mov|mkv)$/i) ? 'video/mp4' : 'image/jpeg'),
+                timestamp: Date.now(),
+                anonymousId: anonId,
+              };
+              await addDoc(collection(db, "messages"), newMessage);
+            } else if (data.error) {
+              throw new Error(data.error);
+            }
+          }
+        } catch (err: any) {
+          console.error("Upload exception for file " + file.name, err);
+          alert("Lỗi kết nối upload cho file " + file.name + ": " + err.message);
         }
       });
 
       await Promise.allSettled(uploadPromises);
     } catch (error) {
       console.error("Upload failed", error);
-      alert("Error during upload.");
+      alert("Lỗi upload: Vui lòng kiểm tra quyền Storage trên Firebase của bạn (Storage Rules). " + error);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -171,17 +241,52 @@ export default function App() {
 
   const deleteMessage = async (msg: Message) => {
     try {
-      if (msg.imageUrl && msg.imageUrl.includes('drive.google.com')) {
-        // Attempt to delete it from Drive via our backend API
-        const res = await fetch("/api/delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: msg.imageUrl })
-        });
-        const data = await res.json();
-        if (!data.success) {
-          console.error("Lỗi xóa file trên Drive:", data.error);
-          // Vẫn cho phép xóa tin nhắn nếu có lỗi
+      if (msg.imageUrl) {
+        if (msg.imageUrl.includes('drive.google.com')) {
+          const appScriptUrl = process.env.APPS_SCRIPT_URL;
+          
+          if (appScriptUrl && appScriptUrl.includes("script.google.com")) {
+             // Extract file ID from Google Drive URL
+            let fileId = "";
+            const match = msg.imageUrl.match(/id=([^&]+)/);
+            if (match && match[1]) {
+              fileId = match[1];
+            } else {
+              const parts = msg.imageUrl.split('/');
+              const dIndex = parts.indexOf('d');
+              if (dIndex !== -1 && parts.length > dIndex + 1) {
+                fileId = parts[dIndex + 1];
+              }
+            }
+
+            if (fileId) {
+              await fetch(appScriptUrl, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ action: "delete", fileId })
+              });
+            }
+          } else {
+            // Attempt to delete it from Drive via our backend API fallback
+            const res = await fetch("/api/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url: msg.imageUrl })
+            });
+            const data = await res.json();
+            if (!data.success) {
+              console.error("Lỗi xóa file trên Drive:", data.error);
+              // Vẫn cho phép xóa tin nhắn nếu có lỗi
+            }
+          }
+        } else if (msg.imageUrl.includes('firebase')) {
+          // Attempt to delete from Firebase Storage
+          try {
+            const fileRef = ref(storage, msg.imageUrl);
+            await deleteObject(fileRef);
+          } catch (err) {
+            console.warn("Could not delete from Firebase Storage:", err);
+          }
         }
       }
       await deleteDoc(doc(db, "messages", msg.id));
@@ -462,13 +567,23 @@ export default function App() {
               </button>
               {selectedMedia.type === 'video' ? (
                 <div className="relative w-[90vw] max-w-5xl h-[80vh] bg-transparent rounded shadow-2xl mt-8 lg:mt-0 flex items-center justify-center">
-                  <iframe 
-                    src={getDrivePreviewUrl(selectedMedia.url)} 
-                    allow="autoplay"
-                    allowFullScreen
-                    className="w-full h-full border-none rounded-lg bg-black"
-                    onClick={(e) => e.stopPropagation()}
-                  />
+                  {selectedMedia.url.includes('drive.google.com') ? (
+                    <iframe 
+                      src={getDrivePreviewUrl(selectedMedia.url)} 
+                      allow="autoplay"
+                      allowFullScreen
+                      className="w-full h-full border-none rounded-lg bg-black"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <video 
+                      src={selectedMedia.url} 
+                      controls 
+                      autoPlay 
+                      className="w-full h-full object-contain rounded-lg bg-black"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  )}
                 </div>
               ) : (
                 <img 
