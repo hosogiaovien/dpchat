@@ -142,87 +142,52 @@ export default function App() {
         formData.append("image", file);
         
         try {
-          // Direct upload to Google Apps script to bypass Vercel payload limits
-          const appScriptUrl = process.env.APPS_SCRIPT_URL;
+          // Step 1: Upload directly to Firebase Storage first (fast, allows big files)
+          const fileExt = file.name.split('.').pop();
+          const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+          const fileName = `temp_uploads/${uniqueSuffix}.${fileExt}`;
+          const storageRef = ref(storage, fileName);
+
+          const uploadTask = await uploadBytesResumable(storageRef, file);
+          const temporaryDownloadURL = await getDownloadURL(uploadTask.ref);
+
+          // Step 2: Send URL to backend to upload to Google Drive without 4.5MB Vercel limitation
+          const response = await fetch("/api/upload-url", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              url: temporaryDownloadURL,
+              mimetype: file.type || (file.name.match(/\.(mp4|webm|ogg|wmv|avi|mov|mkv)$/i) ? 'video/mp4' : 'image/jpeg'),
+              filename: file.name
+            })
+          });
+
+          if (!response.ok) {
+            if (response.status === 413) throw new Error("File quá lớn");
+            throw new Error(`Server error: ${response.status}`);
+          }
+
+          const data = await response.json();
+
+          // Step 3: Delete temporary file from Firebase Storage
+          try {
+            await deleteObject(storageRef);
+          } catch (e) {
+            console.warn("Could not delete temporary file from Firebase:", e);
+          }
           
-          if (appScriptUrl && appScriptUrl.includes("script.google.com")) {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            
-            await new Promise((resolve, reject) => {
-              reader.onload = async () => {
-                try {
-                  const base64withPrefix = reader.result as string;
-                  const base64 = base64withPrefix.split(",")[1];
-                  
-                  const response = await fetch(appScriptUrl, {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "text/plain", // bypass CORS preflight
-                    },
-                    body: JSON.stringify({
-                      base64: base64,
-                      mimeType: file.type,
-                      fileName: file.name
-                    }),
-                  });
-
-                  // Google Apps script redirects, browser follows, result is JSON string
-                  const resultText = await response.text();
-                  let data;
-                  try {
-                    data = JSON.parse(resultText);
-                  } catch (e) {
-                    console.error("Failed to parse GAS response", resultText);
-                    throw new Error("Invalid response from Google Drive");
-                  }
-
-                  if (data.url) {
-                    const newMessage = {
-                      imageUrl: data.url,
-                      fileType: file.type || (file.name.match(/\.(mp4|webm|ogg|wmv|avi|mov|mkv)$/i) ? 'video/mp4' : 'image/jpeg'),
-                      timestamp: Date.now(),
-                      anonymousId: anonId,
-                    };
-                    await addDoc(collection(db, "messages"), newMessage);
-                  } else if (data.error) {
-                    throw new Error(data.error);
-                  }
-                  resolve(true);
-                } catch (e) {
-                  reject(e);
-                }
-              };
-              reader.onerror = (e) => reject(e);
-            });
-          } else {
-            // Fallback to Vercel/Node backend
-            const formData = new FormData();
-            formData.append("image", file);
-            
-            const response = await fetch("/api/upload", {
-              method: "POST",
-              body: formData,
-            });
-
-            if (!response.ok) {
-              if (response.status === 413) throw new Error("File too large for Vercel Serverless");
-              throw new Error(`Server error: ${response.status}`);
-            }
-
-            const data = await response.json();
-            
-            if (data.url) {
-              const newMessage = {
-                imageUrl: data.url,
-                fileType: file.type || (file.name.match(/\.(mp4|webm|ogg|wmv|avi|mov|mkv)$/i) ? 'video/mp4' : 'image/jpeg'),
-                timestamp: Date.now(),
-                anonymousId: anonId,
-              };
-              await addDoc(collection(db, "messages"), newMessage);
-            } else if (data.error) {
-              throw new Error(data.error);
-            }
+          if (data.url) {
+            const newMessage = {
+              imageUrl: data.url,
+              fileType: file.type || (file.name.match(/\.(mp4|webm|ogg|wmv|avi|mov|mkv)$/i) ? 'video/mp4' : 'image/jpeg'),
+              timestamp: Date.now(),
+              anonymousId: anonId,
+            };
+            await addDoc(collection(db, "messages"), newMessage);
+          } else if (data.error) {
+            throw new Error(data.error);
           }
         } catch (err: any) {
           console.error("Upload exception for file " + file.name, err);
