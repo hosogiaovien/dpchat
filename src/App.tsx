@@ -83,6 +83,7 @@ export default function App() {
   const [selectedMedia, setSelectedMedia] = useState<{url: string, type: string} | null>(null);
   
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -105,8 +106,8 @@ export default function App() {
 
   useEffect(() => {
     // Scroll to bottom on new messages
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages]);
 
@@ -406,6 +407,11 @@ export default function App() {
                               alt="Video" 
                               referrerPolicy="no-referrer"
                               className="relative w-full h-auto min-h-[150px] max-h-[500px] object-cover opacity-70 group-hover:opacity-50 transition-all block text-transparent"
+                              onLoad={() => {
+                                if (messagesEndRef.current) {
+                                  messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+                                }
+                              }}
                               onError={(e) => {
                                 e.currentTarget.style.display = 'none';
                                 if (e.currentTarget.parentElement) {
@@ -427,6 +433,11 @@ export default function App() {
                             alt="Shared media" 
                             referrerPolicy="no-referrer"
                             className="rounded-lg max-w-full h-auto cursor-pointer hover:brightness-110 transition-all block max-h-[400px]"
+                            onLoad={() => {
+                              if (messagesEndRef.current) {
+                                messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+                              }
+                            }}
                             onClick={(e) => {
                               e.stopPropagation();
                               setSelectedMedia({ url: getImageUrl(msg.imageUrl || ""), type: 'image' });
@@ -484,6 +495,7 @@ export default function App() {
             );
           })}
         </AnimatePresence>
+        <div ref={messagesEndRef} />
       </div>
 
       {/* Input Area */}
